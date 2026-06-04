@@ -45,6 +45,11 @@ services:
       N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-change_this_32char_key_in_prod__}
       GENERIC_TIMEZONE: ${TIMEZONE:-UTC}
       N8N_COMMUNITY_PACKAGES_ENABLED: "true"
+      # ── Mogala VoIP integration ──────────────────────────────────
+      MOGALA_API_URL: ${MOGALA_API_URL:-https://your-mogala-api-url.com}
+      MOGALA_EMAIL: ${MOGALA_EMAIL:-admin@yourdomain.com}
+      MOGALA_PASSWORD: ${MOGALA_PASSWORD:-your-mogala-password}
+      MOGALA_DOMAIN: ${MOGALA_DOMAIN:-yourdomain.com}
     ports:
       - "${N8N_PORT:-5678}:5678"
     volumes:

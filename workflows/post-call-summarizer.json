@@ -1,0 +1,618 @@
+{
+  "updatedAt": "2026-06-04T11:58:52.510Z",
+  "createdAt": "2026-06-04T11:20:33.051Z",
+  "id": "vGnNklGQiVmwFBMH",
+  "name": "\ud83d\udcdd Post-Call Summarizer",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 2
+            }
+          ]
+        }
+      },
+      "id": "af9a2945-46b2-4253-ad91-53350423cdd9",
+      "name": "Every 2 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MOGALA_API_URL }}/auth/login",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "email",
+              "value": "={{ $env.MOGALA_EMAIL }}"
+            },
+            {
+              "name": "password",
+              "value": "={{ $env.MOGALA_PASSWORD }}"
+            },
+            {
+              "name": "domain",
+              "value": "={{ $env.MOGALA_DOMAIN }}"
+            }
+          ]
+        },
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "w4-login",
+      "name": "Mogala Login",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.MOGALA_API_URL }}/api/call-logs",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Mogala Login').item.json.token }}"
+            }
+          ]
+        },
+        "options": {
+          "allowUnauthorizedCerts": true
+        }
+      },
+      "id": "c4852432-9406-48fe-a2d9-8b3d86e54b7c",
+      "name": "Get Completed Calls",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst now = Date.now();\nconst windowMs = 3 * 60 * 1000;\n\n// Track processed call IDs (stored in workflow static data)\nconst processed = $getWorkflowStaticData('global').processedCallIds || [];\n\nconst toSummarize = $input.all()\n  .flatMap(i => Array.isArray(i.json) ? i.json : [i.json])\n  .filter(call => {\n    const started = new Date(call.started_at).getTime();\n    const age = now - started;\n    return call.duration > 0 &&\n           age < windowMs &&\n           age > 5000 && // call must be > 5s old (completed)\n           !processed.includes(call.id);\n  });\n\nreturn toSummarize.map(c => ({ json: c }));\n"
+      },
+      "id": "1c84c42f-e431-40a2-a641-9f28a6389b82",
+      "name": "Filter Unsummarized",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "text": "=Write a concise post-call summary for this completed call.\n\nCall record:\n- Caller: {{ $json.caller }}\n- Agent/Extension: {{ $json.callee }}\n- Duration: {{ $json.duration }} seconds ({{ Math.round($json.duration / 60) }} min)\n- Started: {{ $json.started_at }}\n- Ended: {{ $json.ended_at || 'N/A' }}\n- Status: {{ $json.status }}\n\nRespond with JSON:\n{\n  \"call_id\": \"{{ $json.id }}\",\n  \"caller\": \"{{ $json.caller }}\",\n  \"agent\": \"{{ $json.callee }}\",\n  \"duration_seconds\": {{ $json.duration }},\n  \"summary\": \"2-3 sentence summary of what likely happened based on duration and routing\",\n  \"outcome\": \"resolved|escalated|voicemail|abandoned|transferred\",\n  \"follow_up_required\": true|false,\n  \"follow_up_note\": \"what needs to happen next (if any)\",\n  \"sentiment\": \"positive|neutral|negative\",\n  \"tags\": [\"tag1\", \"tag2\"]\n}",
+        "options": {
+          "systemMessage": "You are a post-call analyst. Generate concise, professional call summaries. Respond only with valid JSON."
+        }
+      },
+      "id": "w4-agent",
+      "name": "Summarize Call",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [
+        880,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "model": "llama3.2",
+        "options": {
+          "temperature": 0.3
+        }
+      },
+      "id": "be228193-9a7e-4a0a-bbd3-6769fb93d55b",
+      "name": "Ollama LLM",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [
+        880,
+        500
+      ],
+      "credentials": {
+        "ollamaApi": {
+          "id": "OP1MhAIbm1YwmIkD",
+          "name": "Ollama Local"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst raw = $input.item.json.text || '';\nlet summary;\ntry { summary = JSON.parse(raw.match(/\\{[\\s\\S]*\\}/)[0]); } catch(e) { summary = { error: 'parse failed', raw }; }\nreturn [{ json: { ...summary, summarized_at: new Date().toISOString() } }];\n"
+      },
+      "id": "48efcf9a-9f53-431a-b756-d6793fced309",
+      "name": "Parse Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst summary = $input.item.json;\n// Persist processed call ID to avoid re-processing\nconst staticData = $getWorkflowStaticData('global');\nif (!staticData.processedCallIds) staticData.processedCallIds = [];\nstaticData.processedCallIds.push(summary.call_id);\n// Keep only last 500 processed IDs (rolling window)\nif (staticData.processedCallIds.length > 500) {\n  staticData.processedCallIds = staticData.processedCallIds.slice(-500);\n}\nconsole.log('[PostCallSummarizer] Logged:', summary.call_id, summary.outcome);\nreturn [{ json: summary }];\n"
+      },
+      "id": "3f12d9a2-59d1-4810-b2ce-4dba1b988d38",
+      "name": "Mark Processed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "notice": "\ud83d\udd27 CONFIGURE: Send summary to your CRM or logging system\nOptions:\n\u2022 POST to your CRM webhook (HubSpot, Salesforce, etc.)\n\u2022 Append to Google Sheets\n\u2022 Write to a database\n\u2022 Send to Slack #call-summaries channel\n\u2022 Store in n8n Data Table"
+      },
+      "id": "5551246a-755b-4654-9d75-08f8c1843f01",
+      "name": "\u2699\ufe0f Push to CRM (configure me)",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Every 2 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Mogala Login",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mogala Login": {
+      "main": [
+        [
+          {
+            "node": "Get Completed Calls",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Completed Calls": {
+      "main": [
+        [
+          {
+            "node": "Filter Unsummarized",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Unsummarized": {
+      "main": [
+        [
+          {
+            "node": "Summarize Call",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ollama LLM": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Summarize Call",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summarize Call": {
+      "main": [
+        [
+          {
+            "node": "Parse Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Summary": {
+      "main": [
+        [
+          {
+            "node": "Mark Processed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": {
+    "node:Every 2 Minutes": {
+      "recurrenceRules": []
+    }
+  },
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": null,
+  "versionId": "b1459085-2704-4491-9c2c-daaf9d2633c1",
+  "activeVersionId": "b1459085-2704-4491-9c2c-daaf9d2633c1",
+  "versionCounter": 3,
+  "triggerCount": 1,
+  "shared": [
+    {
+      "updatedAt": "2026-06-04T11:20:33.051Z",
+      "createdAt": "2026-06-04T11:20:33.051Z",
+      "role": "workflow:owner",
+      "workflowId": "vGnNklGQiVmwFBMH",
+      "projectId": "kbhCbVE9FDKqhdtf",
+      "project": {
+        "updatedAt": "2026-06-04T07:16:21.704Z",
+        "createdAt": "2026-06-04T07:09:36.577Z",
+        "id": "kbhCbVE9FDKqhdtf",
+        "name": "Lynden lyndentempies@gmail.com <lyndentempies@gmail.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "3fb26aaa-f4f7-4c19-be77-a523828d4570"
+      }
+    }
+  ],
+  "tags": [
+    {
+      "updatedAt": "2026-06-04T11:20:16.465Z",
+      "createdAt": "2026-06-04T11:20:16.465Z",
+      "id": "AFB7zOhMECO42yKb",
+      "name": "call-center"
+    }
+  ],
+  "parentFolder": null,
+  "activeVersion": {
+    "updatedAt": "2026-06-04T11:58:52.512Z",
+    "createdAt": "2026-06-04T11:58:52.512Z",
+    "versionId": "b1459085-2704-4491-9c2c-daaf9d2633c1",
+    "workflowId": "vGnNklGQiVmwFBMH",
+    "nodes": [
+      {
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "minutes",
+                "minutesInterval": 2
+              }
+            ]
+          }
+        },
+        "id": "af9a2945-46b2-4253-ad91-53350423cdd9",
+        "name": "Every 2 Minutes",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.2,
+        "position": [
+          0,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "={{ $env.MOGALA_API_URL }}/auth/login",
+          "sendBody": true,
+          "bodyParameters": {
+            "parameters": [
+              {
+                "name": "email",
+                "value": "={{ $env.MOGALA_EMAIL }}"
+              },
+              {
+                "name": "password",
+                "value": "={{ $env.MOGALA_PASSWORD }}"
+              },
+              {
+                "name": "domain",
+                "value": "={{ $env.MOGALA_DOMAIN }}"
+              }
+            ]
+          },
+          "options": {
+            "allowUnauthorizedCerts": true,
+            "response": {
+              "response": {
+                "responseFormat": "json"
+              }
+            }
+          }
+        },
+        "id": "w4-login",
+        "name": "Mogala Login",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          220,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "url": "={{ $env.MOGALA_API_URL }}/api/call-logs",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "=Bearer {{ $('Mogala Login').item.json.token }}"
+              }
+            ]
+          },
+          "options": {
+            "allowUnauthorizedCerts": true
+          }
+        },
+        "id": "c4852432-9406-48fe-a2d9-8b3d86e54b7c",
+        "name": "Get Completed Calls",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          440,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "\nconst now = Date.now();\nconst windowMs = 3 * 60 * 1000;\n\n// Track processed call IDs (stored in workflow static data)\nconst processed = $getWorkflowStaticData('global').processedCallIds || [];\n\nconst toSummarize = $input.all()\n  .flatMap(i => Array.isArray(i.json) ? i.json : [i.json])\n  .filter(call => {\n    const started = new Date(call.started_at).getTime();\n    const age = now - started;\n    return call.duration > 0 &&\n           age < windowMs &&\n           age > 5000 && // call must be > 5s old (completed)\n           !processed.includes(call.id);\n  });\n\nreturn toSummarize.map(c => ({ json: c }));\n"
+        },
+        "id": "1c84c42f-e431-40a2-a641-9f28a6389b82",
+        "name": "Filter Unsummarized",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          660,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "text": "=Write a concise post-call summary for this completed call.\n\nCall record:\n- Caller: {{ $json.caller }}\n- Agent/Extension: {{ $json.callee }}\n- Duration: {{ $json.duration }} seconds ({{ Math.round($json.duration / 60) }} min)\n- Started: {{ $json.started_at }}\n- Ended: {{ $json.ended_at || 'N/A' }}\n- Status: {{ $json.status }}\n\nRespond with JSON:\n{\n  \"call_id\": \"{{ $json.id }}\",\n  \"caller\": \"{{ $json.caller }}\",\n  \"agent\": \"{{ $json.callee }}\",\n  \"duration_seconds\": {{ $json.duration }},\n  \"summary\": \"2-3 sentence summary of what likely happened based on duration and routing\",\n  \"outcome\": \"resolved|escalated|voicemail|abandoned|transferred\",\n  \"follow_up_required\": true|false,\n  \"follow_up_note\": \"what needs to happen next (if any)\",\n  \"sentiment\": \"positive|neutral|negative\",\n  \"tags\": [\"tag1\", \"tag2\"]\n}",
+          "options": {
+            "systemMessage": "You are a post-call analyst. Generate concise, professional call summaries. Respond only with valid JSON."
+          }
+        },
+        "id": "w4-agent",
+        "name": "Summarize Call",
+        "type": "@n8n/n8n-nodes-langchain.chainLlm",
+        "typeVersion": 1.4,
+        "position": [
+          880,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "model": "llama3.2",
+          "options": {
+            "temperature": 0.3
+          }
+        },
+        "id": "be228193-9a7e-4a0a-bbd3-6769fb93d55b",
+        "name": "Ollama LLM",
+        "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+        "typeVersion": 1,
+        "position": [
+          880,
+          500
+        ],
+        "credentials": {
+          "ollamaApi": {
+            "id": "OP1MhAIbm1YwmIkD",
+            "name": "Ollama Local"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "jsCode": "\nconst raw = $input.item.json.text || '';\nlet summary;\ntry { summary = JSON.parse(raw.match(/\\{[\\s\\S]*\\}/)[0]); } catch(e) { summary = { error: 'parse failed', raw }; }\nreturn [{ json: { ...summary, summarized_at: new Date().toISOString() } }];\n"
+        },
+        "id": "48efcf9a-9f53-431a-b756-d6793fced309",
+        "name": "Parse Summary",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1100,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "\nconst summary = $input.item.json;\n// Persist processed call ID to avoid re-processing\nconst staticData = $getWorkflowStaticData('global');\nif (!staticData.processedCallIds) staticData.processedCallIds = [];\nstaticData.processedCallIds.push(summary.call_id);\n// Keep only last 500 processed IDs (rolling window)\nif (staticData.processedCallIds.length > 500) {\n  staticData.processedCallIds = staticData.processedCallIds.slice(-500);\n}\nconsole.log('[PostCallSummarizer] Logged:', summary.call_id, summary.outcome);\nreturn [{ json: summary }];\n"
+        },
+        "id": "3f12d9a2-59d1-4810-b2ce-4dba1b988d38",
+        "name": "Mark Processed",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1320,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "notice": "\ud83d\udd27 CONFIGURE: Send summary to your CRM or logging system\nOptions:\n\u2022 POST to your CRM webhook (HubSpot, Salesforce, etc.)\n\u2022 Append to Google Sheets\n\u2022 Write to a database\n\u2022 Send to Slack #call-summaries channel\n\u2022 Store in n8n Data Table"
+        },
+        "id": "5551246a-755b-4654-9d75-08f8c1843f01",
+        "name": "\u2699\ufe0f Push to CRM (configure me)",
+        "type": "n8n-nodes-base.stickyNote",
+        "typeVersion": 1,
+        "position": [
+          1540,
+          300
+        ]
+      }
+    ],
+    "connections": {
+      "Every 2 Minutes": {
+        "main": [
+          [
+            {
+              "node": "Mogala Login",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Mogala Login": {
+        "main": [
+          [
+            {
+              "node": "Get Completed Calls",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Get Completed Calls": {
+        "main": [
+          [
+            {
+              "node": "Filter Unsummarized",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Filter Unsummarized": {
+        "main": [
+          [
+            {
+              "node": "Summarize Call",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Ollama LLM": {
+        "ai_languageModel": [
+          [
+            {
+              "node": "Summarize Call",
+              "type": "ai_languageModel",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Summarize Call": {
+        "main": [
+          [
+            {
+              "node": "Parse Summary",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Parse Summary": {
+        "main": [
+          [
+            {
+              "node": "Mark Processed",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "nodeGroups": [],
+    "authors": "Lynden lyndentempies@gmail.com",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-06-04T11:59:05.782Z",
+        "id": 32,
+        "workflowId": "vGnNklGQiVmwFBMH",
+        "versionId": "b1459085-2704-4491-9c2c-daaf9d2633c1",
+        "event": "activated",
+        "userId": "3fb26aaa-f4f7-4c19-be77-a523828d4570"
+      },
+      {
+        "createdAt": "2026-06-04T12:00:50.209Z",
+        "id": 37,
+        "workflowId": "vGnNklGQiVmwFBMH",
+        "versionId": "b1459085-2704-4491-9c2c-daaf9d2633c1",
+        "event": "deactivated",
+        "userId": "3fb26aaa-f4f7-4c19-be77-a523828d4570"
+      },
+      {
+        "createdAt": "2026-06-04T12:00:50.354Z",
+        "id": 38,
+        "workflowId": "vGnNklGQiVmwFBMH",
+        "versionId": "b1459085-2704-4491-9c2c-daaf9d2633c1",
+        "event": "activated",
+        "userId": "3fb26aaa-f4f7-4c19-be77-a523828d4570"
+      }
+    ]
+  },
+  "scopes": [
+    "execution:reveal",
+    "workflow:create",
+    "workflow:delete",
+    "workflow:disableRedaction",
+    "workflow:enableRedaction",
+    "workflow:execute",
+    "workflow:execute-chat",
+    "workflow:export",
+    "workflow:list",
+    "workflow:move",
+    "workflow:publish",
+    "workflow:read",
+    "workflow:share",
+    "workflow:unpublish",
+    "workflow:unshare",
+    "workflow:update"
+  ],
+  "checksum": "01675d8cc0624e43023685dc049b3528be5e332e7a617a9b926ee0297020f9f9"
+}

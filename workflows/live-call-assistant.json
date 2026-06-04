@@ -1,0 +1,642 @@
+{
+  "updatedAt": "2026-06-04T11:58:52.389Z",
+  "createdAt": "2026-06-04T11:20:32.987Z",
+  "id": "Fj6bAiY6AmRztvXS",
+  "name": "\ud83c\udfa7 Live Call Assistant",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "seconds",
+              "secondsInterval": 15
+            }
+          ]
+        }
+      },
+      "id": "e6011d3e-14f0-48ac-ae9b-effc336654cc",
+      "name": "Every 15s",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MOGALA_API_URL }}/auth/login",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "email",
+              "value": "={{ $env.MOGALA_EMAIL }}"
+            },
+            {
+              "name": "password",
+              "value": "={{ $env.MOGALA_PASSWORD }}"
+            },
+            {
+              "name": "domain",
+              "value": "={{ $env.MOGALA_DOMAIN }}"
+            }
+          ]
+        },
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "w3-login",
+      "name": "Mogala Login",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.MOGALA_API_URL }}/api/call-logs",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Mogala Login').item.json.token }}"
+            }
+          ]
+        },
+        "options": {
+          "allowUnauthorizedCerts": true
+        }
+      },
+      "id": "13a3be11-1acf-4bc6-afa8-654a337615a2",
+      "name": "Get Live Calls",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst now = Date.now();\nconst liveCalls = $input.all()\n  .flatMap(i => Array.isArray(i.json) ? i.json : [i.json])\n  .filter(call => {\n    const started = new Date(call.started_at).getTime();\n    const ageMs = now - started;\n    return ageMs < 20000 && (call.status === 'ringing' || call.status === 'active' || call.duration === 0);\n  });\n\nif (liveCalls.length === 0) return [];\nreturn liveCalls.map(c => ({ json: c }));\n"
+      },
+      "id": "21805f10-c15f-43ce-8ed4-bd066316dbc6",
+      "name": "Filter Live Calls",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.MOGALA_API_URL }}/api/call-logs?caller={{ encodeURIComponent($json.caller) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Mogala Login').item.json.token }}"
+            }
+          ]
+        },
+        "options": {
+          "allowUnauthorizedCerts": true
+        }
+      },
+      "id": "0bc95e03-fbc1-422a-befb-8a4217c9fe6b",
+      "name": "Get Caller History",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "text": "=A call is coming in RIGHT NOW. Brief the agent in 3 bullet points max.\n\nCurrent call:\n- Caller: {{ $('Filter Live Calls').item.json.caller }}\n- Called: {{ $('Filter Live Calls').item.json.callee }}\n- Started: {{ $('Filter Live Calls').item.json.started_at }}\n\nCaller history (recent calls): {{ JSON.stringify($json) }}\n\nRespond with JSON:\n{\n  \"caller\": \"{{ $('Filter Live Calls').item.json.caller }}\",\n  \"brief\": [\"bullet 1\", \"bullet 2\", \"bullet 3\"],\n  \"suggested_greeting\": \"Hi [caller name], ...\",\n  \"flags\": [\"VIP\" | \"Repeat caller\" | \"First time\" | \"Recent issue\"],\n  \"recommended_action\": \"what the agent should do first\"\n}",
+        "options": {
+          "systemMessage": "You are a real-time call center assistant. Give ultra-brief, actionable context. Respond only with valid JSON."
+        }
+      },
+      "id": "w3-agent",
+      "name": "Surface Call Context",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [
+        1100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "model": "llama3.2",
+        "options": {
+          "temperature": 0.2
+        }
+      },
+      "id": "9394d0d6-2928-436e-b649-2e77a5fc1ecd",
+      "name": "Ollama LLM",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        500
+      ],
+      "credentials": {
+        "ollamaApi": {
+          "id": "OP1MhAIbm1YwmIkD",
+          "name": "Ollama Local"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst raw = $input.item.json.text || '';\nlet context;\ntry { context = JSON.parse(raw.match(/\\{[\\s\\S]*\\}/)[0]); } catch(e) { context = { error: 'parse failed' }; }\nconst out = { ...context, timestamp: new Date().toISOString(), workflow: 'live-call-assistant' };\nconsole.log('[LiveAssist]', JSON.stringify(out));\nreturn [{ json: out }];\n"
+      },
+      "id": "cdfeab85-e7f5-4299-aeb4-215d6c24bcfc",
+      "name": "Format for Dashboard",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "notice": "\ud83d\udd27 CONFIGURE: Push context to your agent dashboard\nOptions:\n\u2022 POST to your dashboard webhook\n\u2022 Write to a shared data table\n\u2022 Send Slack/Teams notification\n\u2022 WebSocket push via external service"
+      },
+      "id": "78d2369f-d149-4586-8c47-115ad649b4cb",
+      "name": "\u2699\ufe0f Push to Dashboard (configure me)",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Every 15s": {
+      "main": [
+        [
+          {
+            "node": "Mogala Login",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mogala Login": {
+      "main": [
+        [
+          {
+            "node": "Get Live Calls",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Live Calls": {
+      "main": [
+        [
+          {
+            "node": "Filter Live Calls",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Live Calls": {
+      "main": [
+        [
+          {
+            "node": "Get Caller History",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Caller History": {
+      "main": [
+        [
+          {
+            "node": "Surface Call Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ollama LLM": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Surface Call Context",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Surface Call Context": {
+      "main": [
+        [
+          {
+            "node": "Format for Dashboard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": {
+    "node:Every 15s": {
+      "recurrenceRules": []
+    }
+  },
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": null,
+  "versionId": "f547f421-9ff5-4dbd-9fbb-4bf20faaa7e4",
+  "activeVersionId": "f547f421-9ff5-4dbd-9fbb-4bf20faaa7e4",
+  "versionCounter": 3,
+  "triggerCount": 1,
+  "shared": [
+    {
+      "updatedAt": "2026-06-04T11:20:32.987Z",
+      "createdAt": "2026-06-04T11:20:32.987Z",
+      "role": "workflow:owner",
+      "workflowId": "Fj6bAiY6AmRztvXS",
+      "projectId": "kbhCbVE9FDKqhdtf",
+      "project": {
+        "updatedAt": "2026-06-04T07:16:21.704Z",
+        "createdAt": "2026-06-04T07:09:36.577Z",
+        "id": "kbhCbVE9FDKqhdtf",
+        "name": "Lynden lyndentempies@gmail.com <lyndentempies@gmail.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "3fb26aaa-f4f7-4c19-be77-a523828d4570"
+      }
+    }
+  ],
+  "tags": [
+    {
+      "updatedAt": "2026-06-04T11:20:16.465Z",
+      "createdAt": "2026-06-04T11:20:16.465Z",
+      "id": "AFB7zOhMECO42yKb",
+      "name": "call-center"
+    }
+  ],
+  "parentFolder": null,
+  "activeVersion": {
+    "updatedAt": "2026-06-04T11:58:52.391Z",
+    "createdAt": "2026-06-04T11:58:52.391Z",
+    "versionId": "f547f421-9ff5-4dbd-9fbb-4bf20faaa7e4",
+    "workflowId": "Fj6bAiY6AmRztvXS",
+    "nodes": [
+      {
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "seconds",
+                "secondsInterval": 15
+              }
+            ]
+          }
+        },
+        "id": "e6011d3e-14f0-48ac-ae9b-effc336654cc",
+        "name": "Every 15s",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.2,
+        "position": [
+          0,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "={{ $env.MOGALA_API_URL }}/auth/login",
+          "sendBody": true,
+          "bodyParameters": {
+            "parameters": [
+              {
+                "name": "email",
+                "value": "={{ $env.MOGALA_EMAIL }}"
+              },
+              {
+                "name": "password",
+                "value": "={{ $env.MOGALA_PASSWORD }}"
+              },
+              {
+                "name": "domain",
+                "value": "={{ $env.MOGALA_DOMAIN }}"
+              }
+            ]
+          },
+          "options": {
+            "allowUnauthorizedCerts": true,
+            "response": {
+              "response": {
+                "responseFormat": "json"
+              }
+            }
+          }
+        },
+        "id": "w3-login",
+        "name": "Mogala Login",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          220,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "url": "={{ $env.MOGALA_API_URL }}/api/call-logs",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "=Bearer {{ $('Mogala Login').item.json.token }}"
+              }
+            ]
+          },
+          "options": {
+            "allowUnauthorizedCerts": true
+          }
+        },
+        "id": "13a3be11-1acf-4bc6-afa8-654a337615a2",
+        "name": "Get Live Calls",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          440,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "\nconst now = Date.now();\nconst liveCalls = $input.all()\n  .flatMap(i => Array.isArray(i.json) ? i.json : [i.json])\n  .filter(call => {\n    const started = new Date(call.started_at).getTime();\n    const ageMs = now - started;\n    return ageMs < 20000 && (call.status === 'ringing' || call.status === 'active' || call.duration === 0);\n  });\n\nif (liveCalls.length === 0) return [];\nreturn liveCalls.map(c => ({ json: c }));\n"
+        },
+        "id": "21805f10-c15f-43ce-8ed4-bd066316dbc6",
+        "name": "Filter Live Calls",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          660,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "url": "={{ $env.MOGALA_API_URL }}/api/call-logs?caller={{ encodeURIComponent($json.caller) }}",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "=Bearer {{ $('Mogala Login').item.json.token }}"
+              }
+            ]
+          },
+          "options": {
+            "allowUnauthorizedCerts": true
+          }
+        },
+        "id": "0bc95e03-fbc1-422a-befb-8a4217c9fe6b",
+        "name": "Get Caller History",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          880,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "text": "=A call is coming in RIGHT NOW. Brief the agent in 3 bullet points max.\n\nCurrent call:\n- Caller: {{ $('Filter Live Calls').item.json.caller }}\n- Called: {{ $('Filter Live Calls').item.json.callee }}\n- Started: {{ $('Filter Live Calls').item.json.started_at }}\n\nCaller history (recent calls): {{ JSON.stringify($json) }}\n\nRespond with JSON:\n{\n  \"caller\": \"{{ $('Filter Live Calls').item.json.caller }}\",\n  \"brief\": [\"bullet 1\", \"bullet 2\", \"bullet 3\"],\n  \"suggested_greeting\": \"Hi [caller name], ...\",\n  \"flags\": [\"VIP\" | \"Repeat caller\" | \"First time\" | \"Recent issue\"],\n  \"recommended_action\": \"what the agent should do first\"\n}",
+          "options": {
+            "systemMessage": "You are a real-time call center assistant. Give ultra-brief, actionable context. Respond only with valid JSON."
+          }
+        },
+        "id": "w3-agent",
+        "name": "Surface Call Context",
+        "type": "@n8n/n8n-nodes-langchain.chainLlm",
+        "typeVersion": 1.4,
+        "position": [
+          1100,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "model": "llama3.2",
+          "options": {
+            "temperature": 0.2
+          }
+        },
+        "id": "9394d0d6-2928-436e-b649-2e77a5fc1ecd",
+        "name": "Ollama LLM",
+        "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+        "typeVersion": 1,
+        "position": [
+          1100,
+          500
+        ],
+        "credentials": {
+          "ollamaApi": {
+            "id": "OP1MhAIbm1YwmIkD",
+            "name": "Ollama Local"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "jsCode": "\nconst raw = $input.item.json.text || '';\nlet context;\ntry { context = JSON.parse(raw.match(/\\{[\\s\\S]*\\}/)[0]); } catch(e) { context = { error: 'parse failed' }; }\nconst out = { ...context, timestamp: new Date().toISOString(), workflow: 'live-call-assistant' };\nconsole.log('[LiveAssist]', JSON.stringify(out));\nreturn [{ json: out }];\n"
+        },
+        "id": "cdfeab85-e7f5-4299-aeb4-215d6c24bcfc",
+        "name": "Format for Dashboard",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1320,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "notice": "\ud83d\udd27 CONFIGURE: Push context to your agent dashboard\nOptions:\n\u2022 POST to your dashboard webhook\n\u2022 Write to a shared data table\n\u2022 Send Slack/Teams notification\n\u2022 WebSocket push via external service"
+        },
+        "id": "78d2369f-d149-4586-8c47-115ad649b4cb",
+        "name": "\u2699\ufe0f Push to Dashboard (configure me)",
+        "type": "n8n-nodes-base.stickyNote",
+        "typeVersion": 1,
+        "position": [
+          1540,
+          300
+        ]
+      }
+    ],
+    "connections": {
+      "Every 15s": {
+        "main": [
+          [
+            {
+              "node": "Mogala Login",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Mogala Login": {
+        "main": [
+          [
+            {
+              "node": "Get Live Calls",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Get Live Calls": {
+        "main": [
+          [
+            {
+              "node": "Filter Live Calls",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Filter Live Calls": {
+        "main": [
+          [
+            {
+              "node": "Get Caller History",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Get Caller History": {
+        "main": [
+          [
+            {
+              "node": "Surface Call Context",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Ollama LLM": {
+        "ai_languageModel": [
+          [
+            {
+              "node": "Surface Call Context",
+              "type": "ai_languageModel",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Surface Call Context": {
+        "main": [
+          [
+            {
+              "node": "Format for Dashboard",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "nodeGroups": [],
+    "authors": "Lynden lyndentempies@gmail.com",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-06-04T11:59:05.580Z",
+        "id": 30,
+        "workflowId": "Fj6bAiY6AmRztvXS",
+        "versionId": "f547f421-9ff5-4dbd-9fbb-4bf20faaa7e4",
+        "event": "activated",
+        "userId": "3fb26aaa-f4f7-4c19-be77-a523828d4570"
+      },
+      {
+        "createdAt": "2026-06-04T12:00:50.005Z",
+        "id": 35,
+        "workflowId": "Fj6bAiY6AmRztvXS",
+        "versionId": "f547f421-9ff5-4dbd-9fbb-4bf20faaa7e4",
+        "event": "deactivated",
+        "userId": "3fb26aaa-f4f7-4c19-be77-a523828d4570"
+      },
+      {
+        "createdAt": "2026-06-04T12:00:50.138Z",
+        "id": 36,
+        "workflowId": "Fj6bAiY6AmRztvXS",
+        "versionId": "f547f421-9ff5-4dbd-9fbb-4bf20faaa7e4",
+        "event": "activated",
+        "userId": "3fb26aaa-f4f7-4c19-be77-a523828d4570"
+      }
+    ]
+  },
+  "scopes": [
+    "execution:reveal",
+    "workflow:create",
+    "workflow:delete",
+    "workflow:disableRedaction",
+    "workflow:enableRedaction",
+    "workflow:execute",
+    "workflow:execute-chat",
+    "workflow:export",
+    "workflow:list",
+    "workflow:move",
+    "workflow:publish",
+    "workflow:read",
+    "workflow:share",
+    "workflow:unpublish",
+    "workflow:unshare",
+    "workflow:update"
+  ],
+  "checksum": "cc76b7154ff77f074f2c5ec03c538e9a9bd28f53961e45e5431a6a0de53abff7"
+}

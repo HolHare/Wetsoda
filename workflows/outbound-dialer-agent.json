@@ -1,0 +1,658 @@
+{
+  "updatedAt": "2026-06-04T11:58:52.252Z",
+  "createdAt": "2026-06-04T11:20:32.922Z",
+  "id": "4XL5TwbT0E3677wK",
+  "name": "\ud83d\udcde Outbound Dialer Agent",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "outbound-dialer",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "419a48e8-d29d-4416-b6ac-637caeedc2a1",
+      "name": "Start Dialing Campaign",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "wetsoda-outbound-dialer"
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// Expected payload: { contacts: [{phone, name, context}], script_goal: \"...\" }\nconst body = $input.item.json.body || $input.item.json;\nconst contacts = body.contacts || [];\nconst scriptGoal = body.script_goal || 'General outbound call';\nreturn contacts.map(c => ({\n  json: { phone: c.phone, name: c.name || 'Unknown', context: c.context || '', scriptGoal }\n}));\n"
+      },
+      "id": "10efafe3-85b3-4380-a26b-4905fd5a4008",
+      "name": "Parse Contact List",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MOGALA_API_URL }}/auth/login",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "email",
+              "value": "={{ $env.MOGALA_EMAIL }}"
+            },
+            {
+              "name": "password",
+              "value": "={{ $env.MOGALA_PASSWORD }}"
+            },
+            {
+              "name": "domain",
+              "value": "={{ $env.MOGALA_DOMAIN }}"
+            }
+          ]
+        },
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "w2-login",
+      "name": "Mogala Login",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.MOGALA_API_URL }}/api/extensions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Mogala Login').item.json.token }}"
+            }
+          ]
+        },
+        "options": {
+          "allowUnauthorizedCerts": true
+        }
+      },
+      "id": "7b42fab2-89c1-461c-8aa1-d7c14a279e17",
+      "name": "Get Agent Extensions",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "text": "=Generate a concise outbound call script for this contact.\n\nContact: {{ $json.name }} ({{ $json.phone }})\nContext: {{ $json.context }}\nGoal: {{ $json.scriptGoal }}\nAvailable agent extensions: {{ $('Get Agent Extensions').item.json }}\n\nRespond with JSON:\n{\n  \"contact_phone\": \"{{ $json.phone }}\",\n  \"contact_name\": \"{{ $json.name }}\",\n  \"opening\": \"word-for-word opening line\",\n  \"key_points\": [\"point1\", \"point2\", \"point3\"],\n  \"objection_handlers\": {\"common objection\": \"response\"},\n  \"closing\": \"closing line\",\n  \"assigned_extension\": \"best extension number to use\"\n}",
+        "options": {
+          "systemMessage": "You are an outbound call script writer for a call center. Write natural, conversational scripts. Respond only with valid JSON."
+        }
+      },
+      "id": "w2-agent",
+      "name": "Generate Call Script",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [
+        880,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "model": "llama3.2",
+        "options": {
+          "temperature": 0.5
+        }
+      },
+      "id": "6fc4d4c2-a696-4cb0-9794-8f9756a4cbfb",
+      "name": "Ollama LLM",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [
+        880,
+        500
+      ],
+      "credentials": {
+        "ollamaApi": {
+          "id": "OP1MhAIbm1YwmIkD",
+          "name": "Ollama Local"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst raw = $input.item.json.text || '';\nlet script;\ntry { script = JSON.parse(raw.match(/\\{[\\s\\S]*\\}/)[0]); } catch(e) { script = {error: 'parse failed', raw}; }\nreturn [{ json: { ...script, generated_at: new Date().toISOString() } }];\n"
+      },
+      "id": "1b625e2a-bdc5-497e-8e30-bcd0fadd1fcd",
+      "name": "Parse Script",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "notice": "\ud83d\udd27 CONFIGURE: Add HTTP Request to Asterisk AMI or Kamailio API\nEndpoint: POST /ari/channels or AMI Originate\nPayload: { channel: 'SIP/{{ $json.assigned_extension }}', exten: '{{ $json.contact_phone }}' }\nAuth: Bearer from mogala login"
+      },
+      "id": "f62b2432-79a5-481a-ab60-16f321a16336",
+      "name": "\u2699\ufe0f Originate Call (configure me)",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst item = $input.item.json;\nconsole.log('[Wetsoda Dialer]', JSON.stringify({\n  contact: item.contact_name,\n  phone: item.contact_phone,\n  extension: item.assigned_extension,\n  timestamp: new Date().toISOString()\n}));\nreturn [{ json: { status: 'queued', ...item } }];\n"
+      },
+      "id": "6e19a6c0-a607-4499-b341-8860f3d28120",
+      "name": "Log Dial Event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'ok', queued: $input.all().length }) }}"
+      },
+      "id": "4577772f-ff03-4f4e-8f42-89f9eda5005b",
+      "name": "Campaign Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1540,
+        380
+      ]
+    }
+  ],
+  "connections": {
+    "Start Dialing Campaign": {
+      "main": [
+        [
+          {
+            "node": "Parse Contact List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Contact List": {
+      "main": [
+        [
+          {
+            "node": "Mogala Login",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mogala Login": {
+      "main": [
+        [
+          {
+            "node": "Get Agent Extensions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Agent Extensions": {
+      "main": [
+        [
+          {
+            "node": "Generate Call Script",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ollama LLM": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Generate Call Script",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Call Script": {
+      "main": [
+        [
+          {
+            "node": "Parse Script",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Script": {
+      "main": [
+        [
+          {
+            "node": "Log Dial Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Dial Event": {
+      "main": [
+        [
+          {
+            "node": "Campaign Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": null,
+  "versionId": "da137349-5d00-40fa-9323-6eb324a2fd17",
+  "activeVersionId": "da137349-5d00-40fa-9323-6eb324a2fd17",
+  "versionCounter": 3,
+  "triggerCount": 1,
+  "shared": [
+    {
+      "updatedAt": "2026-06-04T11:20:32.922Z",
+      "createdAt": "2026-06-04T11:20:32.922Z",
+      "role": "workflow:owner",
+      "workflowId": "4XL5TwbT0E3677wK",
+      "projectId": "kbhCbVE9FDKqhdtf",
+      "project": {
+        "updatedAt": "2026-06-04T07:16:21.704Z",
+        "createdAt": "2026-06-04T07:09:36.577Z",
+        "id": "kbhCbVE9FDKqhdtf",
+        "name": "Lynden lyndentempies@gmail.com <lyndentempies@gmail.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "3fb26aaa-f4f7-4c19-be77-a523828d4570"
+      }
+    }
+  ],
+  "tags": [
+    {
+      "updatedAt": "2026-06-04T11:20:16.465Z",
+      "createdAt": "2026-06-04T11:20:16.465Z",
+      "id": "AFB7zOhMECO42yKb",
+      "name": "call-center"
+    }
+  ],
+  "parentFolder": null,
+  "activeVersion": {
+    "updatedAt": "2026-06-04T11:58:52.254Z",
+    "createdAt": "2026-06-04T11:58:52.254Z",
+    "versionId": "da137349-5d00-40fa-9323-6eb324a2fd17",
+    "workflowId": "4XL5TwbT0E3677wK",
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "outbound-dialer",
+          "responseMode": "responseNode",
+          "options": {}
+        },
+        "id": "419a48e8-d29d-4416-b6ac-637caeedc2a1",
+        "name": "Start Dialing Campaign",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          0,
+          300
+        ],
+        "webhookId": "wetsoda-outbound-dialer"
+      },
+      {
+        "parameters": {
+          "jsCode": "\n// Expected payload: { contacts: [{phone, name, context}], script_goal: \"...\" }\nconst body = $input.item.json.body || $input.item.json;\nconst contacts = body.contacts || [];\nconst scriptGoal = body.script_goal || 'General outbound call';\nreturn contacts.map(c => ({\n  json: { phone: c.phone, name: c.name || 'Unknown', context: c.context || '', scriptGoal }\n}));\n"
+        },
+        "id": "10efafe3-85b3-4380-a26b-4905fd5a4008",
+        "name": "Parse Contact List",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          220,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "={{ $env.MOGALA_API_URL }}/auth/login",
+          "sendBody": true,
+          "bodyParameters": {
+            "parameters": [
+              {
+                "name": "email",
+                "value": "={{ $env.MOGALA_EMAIL }}"
+              },
+              {
+                "name": "password",
+                "value": "={{ $env.MOGALA_PASSWORD }}"
+              },
+              {
+                "name": "domain",
+                "value": "={{ $env.MOGALA_DOMAIN }}"
+              }
+            ]
+          },
+          "options": {
+            "allowUnauthorizedCerts": true,
+            "response": {
+              "response": {
+                "responseFormat": "json"
+              }
+            }
+          }
+        },
+        "id": "w2-login",
+        "name": "Mogala Login",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          440,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "url": "={{ $env.MOGALA_API_URL }}/api/extensions",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "=Bearer {{ $('Mogala Login').item.json.token }}"
+              }
+            ]
+          },
+          "options": {
+            "allowUnauthorizedCerts": true
+          }
+        },
+        "id": "7b42fab2-89c1-461c-8aa1-d7c14a279e17",
+        "name": "Get Agent Extensions",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          660,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "text": "=Generate a concise outbound call script for this contact.\n\nContact: {{ $json.name }} ({{ $json.phone }})\nContext: {{ $json.context }}\nGoal: {{ $json.scriptGoal }}\nAvailable agent extensions: {{ $('Get Agent Extensions').item.json }}\n\nRespond with JSON:\n{\n  \"contact_phone\": \"{{ $json.phone }}\",\n  \"contact_name\": \"{{ $json.name }}\",\n  \"opening\": \"word-for-word opening line\",\n  \"key_points\": [\"point1\", \"point2\", \"point3\"],\n  \"objection_handlers\": {\"common objection\": \"response\"},\n  \"closing\": \"closing line\",\n  \"assigned_extension\": \"best extension number to use\"\n}",
+          "options": {
+            "systemMessage": "You are an outbound call script writer for a call center. Write natural, conversational scripts. Respond only with valid JSON."
+          }
+        },
+        "id": "w2-agent",
+        "name": "Generate Call Script",
+        "type": "@n8n/n8n-nodes-langchain.chainLlm",
+        "typeVersion": 1.4,
+        "position": [
+          880,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "model": "llama3.2",
+          "options": {
+            "temperature": 0.5
+          }
+        },
+        "id": "6fc4d4c2-a696-4cb0-9794-8f9756a4cbfb",
+        "name": "Ollama LLM",
+        "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+        "typeVersion": 1,
+        "position": [
+          880,
+          500
+        ],
+        "credentials": {
+          "ollamaApi": {
+            "id": "OP1MhAIbm1YwmIkD",
+            "name": "Ollama Local"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "jsCode": "\nconst raw = $input.item.json.text || '';\nlet script;\ntry { script = JSON.parse(raw.match(/\\{[\\s\\S]*\\}/)[0]); } catch(e) { script = {error: 'parse failed', raw}; }\nreturn [{ json: { ...script, generated_at: new Date().toISOString() } }];\n"
+        },
+        "id": "1b625e2a-bdc5-497e-8e30-bcd0fadd1fcd",
+        "name": "Parse Script",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1100,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "notice": "\ud83d\udd27 CONFIGURE: Add HTTP Request to Asterisk AMI or Kamailio API\nEndpoint: POST /ari/channels or AMI Originate\nPayload: { channel: 'SIP/{{ $json.assigned_extension }}', exten: '{{ $json.contact_phone }}' }\nAuth: Bearer from mogala login"
+        },
+        "id": "f62b2432-79a5-481a-ab60-16f321a16336",
+        "name": "\u2699\ufe0f Originate Call (configure me)",
+        "type": "n8n-nodes-base.stickyNote",
+        "typeVersion": 1,
+        "position": [
+          1320,
+          200
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "\nconst item = $input.item.json;\nconsole.log('[Wetsoda Dialer]', JSON.stringify({\n  contact: item.contact_name,\n  phone: item.contact_phone,\n  extension: item.assigned_extension,\n  timestamp: new Date().toISOString()\n}));\nreturn [{ json: { status: 'queued', ...item } }];\n"
+        },
+        "id": "6e19a6c0-a607-4499-b341-8860f3d28120",
+        "name": "Log Dial Event",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1320,
+          380
+        ]
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ JSON.stringify({ status: 'ok', queued: $input.all().length }) }}"
+        },
+        "id": "4577772f-ff03-4f4e-8f42-89f9eda5005b",
+        "name": "Campaign Response",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1.1,
+        "position": [
+          1540,
+          380
+        ]
+      }
+    ],
+    "connections": {
+      "Start Dialing Campaign": {
+        "main": [
+          [
+            {
+              "node": "Parse Contact List",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Parse Contact List": {
+        "main": [
+          [
+            {
+              "node": "Mogala Login",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Mogala Login": {
+        "main": [
+          [
+            {
+              "node": "Get Agent Extensions",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Get Agent Extensions": {
+        "main": [
+          [
+            {
+              "node": "Generate Call Script",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Ollama LLM": {
+        "ai_languageModel": [
+          [
+            {
+              "node": "Generate Call Script",
+              "type": "ai_languageModel",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Generate Call Script": {
+        "main": [
+          [
+            {
+              "node": "Parse Script",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Parse Script": {
+        "main": [
+          [
+            {
+              "node": "Log Dial Event",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Log Dial Event": {
+        "main": [
+          [
+            {
+              "node": "Campaign Response",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "nodeGroups": [],
+    "authors": "Lynden lyndentempies@gmail.com",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-06-04T11:59:05.370Z",
+        "id": 28,
+        "workflowId": "4XL5TwbT0E3677wK",
+        "versionId": "da137349-5d00-40fa-9323-6eb324a2fd17",
+        "event": "activated",
+        "userId": "3fb26aaa-f4f7-4c19-be77-a523828d4570"
+      },
+      {
+        "createdAt": "2026-06-04T12:00:49.752Z",
+        "id": 33,
+        "workflowId": "4XL5TwbT0E3677wK",
+        "versionId": "da137349-5d00-40fa-9323-6eb324a2fd17",
+        "event": "deactivated",
+        "userId": "3fb26aaa-f4f7-4c19-be77-a523828d4570"
+      },
+      {
+        "createdAt": "2026-06-04T12:00:49.928Z",
+        "id": 34,
+        "workflowId": "4XL5TwbT0E3677wK",
+        "versionId": "da137349-5d00-40fa-9323-6eb324a2fd17",
+        "event": "activated",
+        "userId": "3fb26aaa-f4f7-4c19-be77-a523828d4570"
+      }
+    ]
+  },
+  "scopes": [
+    "execution:reveal",
+    "workflow:create",
+    "workflow:delete",
+    "workflow:disableRedaction",
+    "workflow:enableRedaction",
+    "workflow:execute",
+    "workflow:execute-chat",
+    "workflow:export",
+    "workflow:list",
+    "workflow:move",
+    "workflow:publish",
+    "workflow:read",
+    "workflow:share",
+    "workflow:unpublish",
+    "workflow:unshare",
+    "workflow:update"
+  ],
+  "checksum": "6e0c19e346d0e70c23998c9935ec13d2f8c9558a4e363afd57528ef9db076bf2"
+}

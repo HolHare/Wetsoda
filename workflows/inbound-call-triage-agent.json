@@ -1,0 +1,852 @@
+{
+  "updatedAt": "2026-06-04T12:00:40.487Z",
+  "createdAt": "2026-06-04T11:20:28.797Z",
+  "id": "51TNleTiVWKsIhQw",
+  "name": "\ud83c\udfaf Inbound Call Triage Agent",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "seconds",
+              "secondsInterval": 30
+            }
+          ]
+        }
+      },
+      "id": "27229823-b9b8-4b26-987e-b8736dbea29a",
+      "name": "Every 30s",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MOGALA_API_URL }}/auth/login",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "email",
+              "value": "={{ $env.MOGALA_EMAIL }}"
+            },
+            {
+              "name": "password",
+              "value": "={{ $env.MOGALA_PASSWORD }}"
+            },
+            {
+              "name": "domain",
+              "value": "={{ $env.MOGALA_DOMAIN }}"
+            }
+          ]
+        },
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "w1-login",
+      "name": "Mogala Login",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.MOGALA_API_URL }}/api/call-logs",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Mogala Login').item.json.token }}"
+            }
+          ]
+        },
+        "options": {
+          "allowUnauthorizedCerts": true
+        }
+      },
+      "id": "c4058755-3a03-4d85-9d57-74ed23320902",
+      "name": "Get Call Logs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst now = Date.now();\nconst cutoff = now - 35000; // 35s window\n\nreturn $input.all()\n  .flatMap(item => item.json)\n  .filter(call => {\n    const started = new Date(call.started_at).getTime();\n    return started > cutoff && call.status !== 'processed';\n  })\n  .map(call => ({ json: call }));\n"
+      },
+      "id": "1437ac8a-05cf-47bc-9d43-58c2e77c3378",
+      "name": "Filter New Calls",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "text": "=Classify this inbound call and respond with ONLY a JSON object:\n\nCall details:\n- Caller: {{ $json.caller }}\n- Called number: {{ $json.callee }}\n- Time: {{ $json.started_at }}\n- Duration: {{ $json.duration }}s\n- Status: {{ $json.status }}\n\nRespond with exactly this JSON structure:\n{\n  \"intent\": \"support|sales|billing|emergency|other\",\n  \"confidence\": 0.0-1.0,\n  \"reason\": \"brief explanation\",\n  \"priority\": \"high|medium|low\",\n  \"caller\": \"{{ $json.caller }}\",\n  \"callee\": \"{{ $json.callee }}\"\n}",
+        "options": {
+          "systemMessage": "You are a call center routing AI. Classify inbound calls based on the called number and caller patterns. Respond only with valid JSON."
+        }
+      },
+      "id": "w1-agent",
+      "name": "Classify Intent",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [
+        880,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "model": "llama3.2",
+        "options": {
+          "temperature": 0.1
+        }
+      },
+      "id": "4ee3e69c-5e6f-4f5d-9c8d-e6e441a1f0f1",
+      "name": "Ollama LLM",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [
+        880,
+        500
+      ],
+      "credentials": {
+        "ollamaApi": {
+          "id": "OP1MhAIbm1YwmIkD",
+          "name": "Ollama Local"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst raw = $input.item.json.text || $input.item.json.response || '';\nlet parsed;\ntry {\n  const match = raw.match(/\\{[\\s\\S]*\\}/);\n  parsed = JSON.parse(match ? match[0] : raw);\n} catch(e) {\n  parsed = { intent: 'other', confidence: 0, reason: 'parse error', priority: 'low', caller: '', callee: '' };\n}\nreturn [{ json: { ...parsed, raw_response: raw } }];\n"
+      },
+      "id": "bf505b3e-5c76-4cbc-8935-3323da532fb8",
+      "name": "Parse Classification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "rules",
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "support",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "sales",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "billing",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "emergency",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "fallbackOutput": "extra"
+      },
+      "id": "22020d09-5f30-447f-b7b9-8cf8da5a557e",
+      "name": "Route by Intent",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        1320,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "notice": "\u27a1\ufe0f Route to Support Queue\nAdd: Assign to support agent, send Slack alert, create ticket"
+      },
+      "id": "f15b7f42-3661-4391-8ec6-7a4c5312222b",
+      "name": "\u2192 Support",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "notice": "\u27a1\ufe0f Route to Sales Queue\nAdd: Notify sales team, create lead in CRM"
+      },
+      "id": "4cfcea93-5e22-49fb-8351-079f5fe93817",
+      "name": "\u2192 Sales",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "notice": "\u27a1\ufe0f Route to Billing Queue\nAdd: Pull account info, assign billing agent"
+      },
+      "id": "e9c8d303-c2ef-492e-b0c9-64ebbc05de39",
+      "name": "\u2192 Billing",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "notice": "\ud83d\udea8 Emergency Route\nAdd: Page on-call, immediate escalation"
+      },
+      "id": "147c8508-626d-42f2-ad03-d4db7ac8cb36",
+      "name": "\u2192 Emergency",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "notice": "\u2753 Fallback / Unknown\nAdd: IVR menu, general queue"
+      },
+      "id": "e361af01-e33d-491f-b31a-d408c05e3545",
+      "name": "\u2192 Other",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        640
+      ]
+    }
+  ],
+  "connections": {
+    "Every 30s": {
+      "main": [
+        [
+          {
+            "node": "Mogala Login",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mogala Login": {
+      "main": [
+        [
+          {
+            "node": "Get Call Logs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Call Logs": {
+      "main": [
+        [
+          {
+            "node": "Filter New Calls",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter New Calls": {
+      "main": [
+        [
+          {
+            "node": "Classify Intent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ollama LLM": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Classify Intent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Intent": {
+      "main": [
+        [
+          {
+            "node": "Parse Classification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Classification": {
+      "main": [
+        [
+          {
+            "node": "Route by Intent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": {
+    "node:Every 30s": {
+      "recurrenceRules": []
+    }
+  },
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": null,
+  "versionId": "da4891f7-1fe2-44a5-8aa0-27d9aefe4ea0",
+  "activeVersionId": "da4891f7-1fe2-44a5-8aa0-27d9aefe4ea0",
+  "versionCounter": 4,
+  "triggerCount": 1,
+  "shared": [
+    {
+      "updatedAt": "2026-06-04T11:20:28.797Z",
+      "createdAt": "2026-06-04T11:20:28.797Z",
+      "role": "workflow:owner",
+      "workflowId": "51TNleTiVWKsIhQw",
+      "projectId": "kbhCbVE9FDKqhdtf",
+      "project": {
+        "updatedAt": "2026-06-04T07:16:21.704Z",
+        "createdAt": "2026-06-04T07:09:36.577Z",
+        "id": "kbhCbVE9FDKqhdtf",
+        "name": "Lynden lyndentempies@gmail.com <lyndentempies@gmail.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "3fb26aaa-f4f7-4c19-be77-a523828d4570"
+      }
+    }
+  ],
+  "tags": [
+    {
+      "updatedAt": "2026-06-04T11:20:16.465Z",
+      "createdAt": "2026-06-04T11:20:16.465Z",
+      "id": "AFB7zOhMECO42yKb",
+      "name": "call-center"
+    }
+  ],
+  "parentFolder": null,
+  "activeVersion": {
+    "updatedAt": "2026-06-04T12:00:40.514Z",
+    "createdAt": "2026-06-04T12:00:40.514Z",
+    "versionId": "da4891f7-1fe2-44a5-8aa0-27d9aefe4ea0",
+    "workflowId": "51TNleTiVWKsIhQw",
+    "nodes": [
+      {
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "seconds",
+                "secondsInterval": 30
+              }
+            ]
+          }
+        },
+        "id": "27229823-b9b8-4b26-987e-b8736dbea29a",
+        "name": "Every 30s",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.2,
+        "position": [
+          0,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "={{ $env.MOGALA_API_URL }}/auth/login",
+          "sendBody": true,
+          "bodyParameters": {
+            "parameters": [
+              {
+                "name": "email",
+                "value": "={{ $env.MOGALA_EMAIL }}"
+              },
+              {
+                "name": "password",
+                "value": "={{ $env.MOGALA_PASSWORD }}"
+              },
+              {
+                "name": "domain",
+                "value": "={{ $env.MOGALA_DOMAIN }}"
+              }
+            ]
+          },
+          "options": {
+            "allowUnauthorizedCerts": true,
+            "response": {
+              "response": {
+                "responseFormat": "json"
+              }
+            }
+          }
+        },
+        "id": "w1-login",
+        "name": "Mogala Login",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          220,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "url": "={{ $env.MOGALA_API_URL }}/api/call-logs",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "=Bearer {{ $('Mogala Login').item.json.token }}"
+              }
+            ]
+          },
+          "options": {
+            "allowUnauthorizedCerts": true
+          }
+        },
+        "id": "c4058755-3a03-4d85-9d57-74ed23320902",
+        "name": "Get Call Logs",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          440,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "\nconst now = Date.now();\nconst cutoff = now - 35000; // 35s window\n\nreturn $input.all()\n  .flatMap(item => item.json)\n  .filter(call => {\n    const started = new Date(call.started_at).getTime();\n    return started > cutoff && call.status !== 'processed';\n  })\n  .map(call => ({ json: call }));\n"
+        },
+        "id": "1437ac8a-05cf-47bc-9d43-58c2e77c3378",
+        "name": "Filter New Calls",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          660,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "text": "=Classify this inbound call and respond with ONLY a JSON object:\n\nCall details:\n- Caller: {{ $json.caller }}\n- Called number: {{ $json.callee }}\n- Time: {{ $json.started_at }}\n- Duration: {{ $json.duration }}s\n- Status: {{ $json.status }}\n\nRespond with exactly this JSON structure:\n{\n  \"intent\": \"support|sales|billing|emergency|other\",\n  \"confidence\": 0.0-1.0,\n  \"reason\": \"brief explanation\",\n  \"priority\": \"high|medium|low\",\n  \"caller\": \"{{ $json.caller }}\",\n  \"callee\": \"{{ $json.callee }}\"\n}",
+          "options": {
+            "systemMessage": "You are a call center routing AI. Classify inbound calls based on the called number and caller patterns. Respond only with valid JSON."
+          }
+        },
+        "id": "w1-agent",
+        "name": "Classify Intent",
+        "type": "@n8n/n8n-nodes-langchain.chainLlm",
+        "typeVersion": 1.4,
+        "position": [
+          880,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "model": "llama3.2",
+          "options": {
+            "temperature": 0.1
+          }
+        },
+        "id": "4ee3e69c-5e6f-4f5d-9c8d-e6e441a1f0f1",
+        "name": "Ollama LLM",
+        "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+        "typeVersion": 1,
+        "position": [
+          880,
+          500
+        ],
+        "credentials": {
+          "ollamaApi": {
+            "id": "OP1MhAIbm1YwmIkD",
+            "name": "Ollama Local"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "jsCode": "\nconst raw = $input.item.json.text || $input.item.json.response || '';\nlet parsed;\ntry {\n  const match = raw.match(/\\{[\\s\\S]*\\}/);\n  parsed = JSON.parse(match ? match[0] : raw);\n} catch(e) {\n  parsed = { intent: 'other', confidence: 0, reason: 'parse error', priority: 'low', caller: '', callee: '' };\n}\nreturn [{ json: { ...parsed, raw_response: raw } }];\n"
+        },
+        "id": "bf505b3e-5c76-4cbc-8935-3323da532fb8",
+        "name": "Parse Classification",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1100,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "mode": "rules",
+          "rules": {
+            "values": [
+              {
+                "conditions": {
+                  "options": {
+                    "caseSensitive": false
+                  },
+                  "conditions": [
+                    {
+                      "leftValue": "={{ $json.intent }}",
+                      "rightValue": "support",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "conditions": {
+                  "options": {
+                    "caseSensitive": false
+                  },
+                  "conditions": [
+                    {
+                      "leftValue": "={{ $json.intent }}",
+                      "rightValue": "sales",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "conditions": {
+                  "options": {
+                    "caseSensitive": false
+                  },
+                  "conditions": [
+                    {
+                      "leftValue": "={{ $json.intent }}",
+                      "rightValue": "billing",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "conditions": {
+                  "options": {
+                    "caseSensitive": false
+                  },
+                  "conditions": [
+                    {
+                      "leftValue": "={{ $json.intent }}",
+                      "rightValue": "emergency",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "fallbackOutput": "extra"
+        },
+        "id": "22020d09-5f30-447f-b7b9-8cf8da5a557e",
+        "name": "Route by Intent",
+        "type": "n8n-nodes-base.switch",
+        "typeVersion": 3,
+        "position": [
+          1320,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "notice": "\u27a1\ufe0f Route to Support Queue\nAdd: Assign to support agent, send Slack alert, create ticket"
+        },
+        "id": "f15b7f42-3661-4391-8ec6-7a4c5312222b",
+        "name": "\u2192 Support",
+        "type": "n8n-nodes-base.stickyNote",
+        "typeVersion": 1,
+        "position": [
+          1540,
+          160
+        ]
+      },
+      {
+        "parameters": {
+          "notice": "\u27a1\ufe0f Route to Sales Queue\nAdd: Notify sales team, create lead in CRM"
+        },
+        "id": "4cfcea93-5e22-49fb-8351-079f5fe93817",
+        "name": "\u2192 Sales",
+        "type": "n8n-nodes-base.stickyNote",
+        "typeVersion": 1,
+        "position": [
+          1540,
+          280
+        ]
+      },
+      {
+        "parameters": {
+          "notice": "\u27a1\ufe0f Route to Billing Queue\nAdd: Pull account info, assign billing agent"
+        },
+        "id": "e9c8d303-c2ef-492e-b0c9-64ebbc05de39",
+        "name": "\u2192 Billing",
+        "type": "n8n-nodes-base.stickyNote",
+        "typeVersion": 1,
+        "position": [
+          1540,
+          400
+        ]
+      },
+      {
+        "parameters": {
+          "notice": "\ud83d\udea8 Emergency Route\nAdd: Page on-call, immediate escalation"
+        },
+        "id": "147c8508-626d-42f2-ad03-d4db7ac8cb36",
+        "name": "\u2192 Emergency",
+        "type": "n8n-nodes-base.stickyNote",
+        "typeVersion": 1,
+        "position": [
+          1540,
+          520
+        ]
+      },
+      {
+        "parameters": {
+          "notice": "\u2753 Fallback / Unknown\nAdd: IVR menu, general queue"
+        },
+        "id": "e361af01-e33d-491f-b31a-d408c05e3545",
+        "name": "\u2192 Other",
+        "type": "n8n-nodes-base.stickyNote",
+        "typeVersion": 1,
+        "position": [
+          1540,
+          640
+        ]
+      }
+    ],
+    "connections": {
+      "Every 30s": {
+        "main": [
+          [
+            {
+              "node": "Mogala Login",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Mogala Login": {
+        "main": [
+          [
+            {
+              "node": "Get Call Logs",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Get Call Logs": {
+        "main": [
+          [
+            {
+              "node": "Filter New Calls",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Filter New Calls": {
+        "main": [
+          [
+            {
+              "node": "Classify Intent",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Ollama LLM": {
+        "ai_languageModel": [
+          [
+            {
+              "node": "Classify Intent",
+              "type": "ai_languageModel",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Classify Intent": {
+        "main": [
+          [
+            {
+              "node": "Parse Classification",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Parse Classification": {
+        "main": [
+          [
+            {
+              "node": "Route by Intent",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "nodeGroups": [],
+    "authors": "Lynden lyndentempies@gmail.com",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-06-04T12:00:50.562Z",
+        "id": 40,
+        "workflowId": "51TNleTiVWKsIhQw",
+        "versionId": "da4891f7-1fe2-44a5-8aa0-27d9aefe4ea0",
+        "event": "activated",
+        "userId": "3fb26aaa-f4f7-4c19-be77-a523828d4570"
+      }
+    ]
+  },
+  "scopes": [
+    "execution:reveal",
+    "workflow:create",
+    "workflow:delete",
+    "workflow:disableRedaction",
+    "workflow:enableRedaction",
+    "workflow:execute",
+    "workflow:execute-chat",
+    "workflow:export",
+    "workflow:list",
+    "workflow:move",
+    "workflow:publish",
+    "workflow:read",
+    "workflow:share",
+    "workflow:unpublish",
+    "workflow:unshare",
+    "workflow:update"
+  ],
+  "checksum": "a9d83477a8e1811dce90cb51deb44b997be6b395ef61d18f169579f7f724138c"
+}
